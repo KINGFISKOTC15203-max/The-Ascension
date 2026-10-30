@@ -1,0 +1,47 @@
+# Base44 sandbox environment for the OneKey monorepo.
+#
+# Runs the *web* app (@onekeyhq/web) from source with the webpack dev server,
+# so edits are picked up without rebuilding an image. There is no local
+# backend: the wallet talks to OneKey's hosted APIs over the network.
+#
+# Dependencies are installed into the bind-mounted checkout on startup
+# (node_modules/ is gitignored) using the repo's pinned Yarn 4 release.
+services:
+  web:
+    image: node:22-bookworm
+    working_dir: /app
+    restart: on-failure
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=development
+      - WEB_PORT=3000
+      # Sandbox preview flag supplied by the platform; only ever read, never set here.
+      - BASE44_PREVIEW_MODE
+      # Bind-mounted sources live on a virtual filesystem, so webpack's watcher
+      # must poll for changes or hot reload never fires.
+      - WATCHPACK_POLLING=true
+    volumes:
+      - ./:/app
+    command:
+      - sh
+      - -ec
+      - |
+        # Use the Yarn release pinned in the repo instead of Corepack.
+        printf '#!/bin/sh\nexec node /app/.yarn/releases/yarn-4.1.0.cjs "$$@"\n' > /usr/local/bin/yarn
+        chmod +x /usr/local/bin/yarn
+        # postinstall -> copy:inject builds apps/web-embed for the native apps.
+        # That production build exhausts this sandbox's RAM and the web app does
+        # not consume it, so the existence check in development/scripts/web-embed.js
+        # is satisfied with an empty output directory instead.
+        mkdir -p apps/web-embed/web-build
+        yarn install --immutable
+        # Hoisted workspace binaries (cross-env, webpack) live in the root .bin.
+        export PATH="/app/node_modules/.bin:$PATH"
+        exec yarn workspace @onekeyhq/web start --host 0.0.0.0
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:3000/ > /dev/null || exit 1"]
+      interval: 15s
+      timeout: 5s
+      start_period: 900s
+      retries: 5
